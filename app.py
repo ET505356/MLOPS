@@ -1,8 +1,8 @@
 import streamlit as st
 
-st.set_page_config(page_title="Mini Dashboard", layout="wide")
+st.set_page_config(page_title="Mini Tablero", layout="wide")
 
-st.title("Mini Dashboard")
+st.title("Mini Tablero")
 st.caption("Dashboard HTML en Streamlit")
 
 metrics = [
