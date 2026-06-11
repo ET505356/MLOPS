@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from databricks import sql
 
 st.set_page_config(
@@ -9,7 +8,7 @@ st.set_page_config(
 )
 
 st.title("Score de Riesgos")
-st.caption("Dashboard conectado a Databricks - Unity Catalog")
+st.caption("Prueba de conexión Streamlit → Databricks")
 
 st.sidebar.header("Filtros")
 
@@ -18,25 +17,97 @@ nivel_riesgo = st.sidebar.selectbox(
     ["Todos", "Alto", "Medio", "Bajo"]
 )
 
-tabla = "score_riesgos.scoring.score_riesgo_predicciones"
+# ======================================================
+# 1. Validación de secrets
+# ======================================================
 
+st.subheader("Validación de Secrets")
 
-@st.cache_data(ttl=300)
-def cargar_datos():
+try:
     server_hostname = st.secrets["databricks"]["server_hostname"]
     http_path = st.secrets["databricks"]["http_path"]
     access_token = st.secrets["databricks"]["access_token"]
 
-    query = f"""
-        SELECT
-            numero_cuenta,
-            score_riesgo,
-            probabilidad_riesgo,
-            nivel_riesgo,
-            version_modelo
-        FROM {tabla}
-    """
+    st.success("Se encontró la sección [databricks] en los secrets.")
 
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("server_hostname", "Cargado" if server_hostname else "Vacío")
+    col2.metric("http_path", "Cargado" if http_path else "Vacío")
+    col3.metric("access_token", "Cargado" if access_token else "Vacío")
+
+    st.write("**server_hostname leído:**")
+    st.code(server_hostname)
+
+    st.write("**http_path leído:**")
+    st.code(http_path)
+
+    st.write("**access_token leído:**")
+    if access_token:
+        st.code(f"{access_token[:6]}...{access_token[-4:]}")
+    else:
+        st.code("Token vacío")
+
+except Exception as e:
+    st.error("No se pudieron leer los secrets.")
+    st.exception(e)
+    st.stop()
+
+
+# ======================================================
+# 2. Validaciones básicas de formato
+# ======================================================
+
+st.subheader("Validación de formato")
+
+errores_formato = []
+
+if server_hostname.startswith("https://"):
+    errores_formato.append("El server_hostname NO debe incluir https://")
+
+if server_hostname.endswith("/"):
+    errores_formato.append("El server_hostname NO debe terminar con /")
+
+if not http_path.startswith("/sql/"):
+    errores_formato.append("El http_path normalmente debe empezar con /sql/")
+
+if not access_token:
+    errores_formato.append("El access_token está vacío")
+
+if errores_formato:
+    for error in errores_formato:
+        st.warning(error)
+else:
+    st.success("El formato básico de los secrets parece correcto.")
+
+
+# ======================================================
+# 3. Consulta a Databricks
+# ======================================================
+
+st.subheader("Prueba de conexión a Databricks")
+
+tabla = "score_riesgos.scoring.score_riesgo_predicciones"
+
+query = f"""
+SELECT
+    numero_cuenta,
+    score_riesgo,
+    probabilidad_riesgo,
+    nivel_riesgo,
+    version_modelo
+FROM {tabla}
+"""
+
+st.write("**Tabla consultada:**")
+st.code(tabla)
+
+st.write("**Query ejecutado:**")
+st.code(query, language="sql")
+
+
+@st.cache_data(ttl=300)
+def cargar_datos_desde_databricks():
     with sql.connect(
         server_hostname=server_hostname,
         http_path=http_path,
@@ -46,7 +117,9 @@ def cargar_datos():
 
 
 try:
-    df = cargar_datos()
+    df = cargar_datos_desde_databricks()
+
+    st.success("Conexión exitosa. Datos leídos desde Databricks.")
 
     if nivel_riesgo != "Todos":
         df = df[df["nivel_riesgo"] == nivel_riesgo]
@@ -62,73 +135,27 @@ try:
 
     st.divider()
 
-    tab1, tab2, tab3 = st.tabs([
-        "Predicciones",
-        "Dashboard de riesgo",
-        "Descarga"
-    ])
+    st.subheader("Predicciones desde Databricks")
 
-    with tab1:
-        st.subheader("Predicciones desde Databricks")
-
-        st.dataframe(
-            df.sort_values("score_riesgo", ascending=False),
-            use_container_width=True
-        )
-
-    with tab2:
-        st.subheader("Distribución por nivel de riesgo")
-
-        if not df.empty:
-            dist = (
-                df.groupby("nivel_riesgo")
-                .size()
-                .reset_index(name="clientes")
-            )
-
-            fig = px.pie(
-                dist,
-                names="nivel_riesgo",
-                values="clientes",
-                hole=0.45
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("Score promedio por nivel de riesgo")
-
-            promedio = (
-                df.groupby("nivel_riesgo")["score_riesgo"]
-                .mean()
-                .reset_index()
-            )
-
-            fig_bar = px.bar(
-                promedio,
-                x="nivel_riesgo",
-                y="score_riesgo"
-            )
-
-            st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.warning("No hay datos para los filtros seleccionados.")
-
-    with tab3:
-        st.subheader("Descargar resultados")
-
-        csv = df.to_csv(index=False).encode("utf-8")
-
-        st.download_button(
-            label="Descargar CSV",
-            data=csv,
-            file_name="score_riesgo_predicciones.csv",
-            mime="text/csv"
-        )
+    st.dataframe(
+        df.sort_values("score_riesgo", ascending=False),
+        use_container_width=True
+    )
 
 except Exception as e:
     st.error("No fue posible conectarse a Databricks o consultar la tabla.")
+
     st.info(
-        "Valida que el SQL Warehouse esté activo, que los secrets estén correctos "
-        "y que tu usuario tenga permisos sobre score_riesgos.scoring.score_riesgo_predicciones."
+        """
+        Revisa lo siguiente:
+        
+        1. Que el SQL Warehouse esté encendido.
+        2. Que server_hostname no tenga https://.
+        3. Que http_path sea el del SQL Warehouse.
+        4. Que el token esté vigente.
+        5. Que tu usuario tenga permisos sobre score_riesgos.scoring.score_riesgo_predicciones.
+        6. Que la organización permita conexiones externas desde Streamlit Cloud.
+        """
     )
+
     st.exception(e)
